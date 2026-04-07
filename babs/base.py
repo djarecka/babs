@@ -105,22 +105,25 @@ class BABS:
         if container_config is not None:
             with open(container_config) as f:
                 cfg = yaml.safe_load(f)
-            analysis_dir = (cfg or {}).get('analysis_dir', 'analysis')
         else:
             root_config_path = op.join(self.project_root, 'babs_layout_config.yaml')
+            cfg = {}
             if op.exists(root_config_path):
                 with open(root_config_path) as f:
-                    root_cfg = yaml.safe_load(f)
-                analysis_dir = (root_cfg or {}).get('analysis_dir', 'analysis')
-            else:
-                analysis_dir = 'analysis'
+                    cfg = yaml.safe_load(f) or {}
+
+        analysis_dir = cfg.get('analysis_dir', 'analysis')
         self.analysis_path = op.normpath(op.join(self.project_root, analysis_dir))
         self._analysis_datalad_handle = None
 
         self.config_path = op.join(self.analysis_path, 'code/babs_proj_config.yaml')
 
-        self.input_ria_path = op.join(self.project_root, 'input_ria')
-        self.output_ria_path = op.join(self.project_root, 'output_ria')
+        self.input_ria_path = op.normpath(
+            op.join(self.project_root, cfg.get('input_ria_path', 'input_ria'))
+        )
+        self.output_ria_path = op.normpath(
+            op.join(self.project_root, cfg.get('output_ria_path', 'output_ria'))
+        )
 
         self.input_ria_url = 'ria+file://' + self.input_ria_path
         self.output_ria_url = 'ria+file://' + self.output_ria_path

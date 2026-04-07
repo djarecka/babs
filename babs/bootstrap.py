@@ -106,7 +106,7 @@ class BABSBootstrap(BABS):
         # Persist analysis_dir so other BABS commands can find it:
         root_babs_config_path = op.join(self.project_root, 'babs_layout_config.yaml')
         with open(root_babs_config_path, 'w') as f:
-            yaml.dump({'analysis_dir': op.basename(self.analysis_path)}, f)
+            yaml.dump({'analysis_dir': babs_config.get('analysis_dir', 'analysis')}, f)
         self.input_datasets.set_inclusion_dataframe(initial_inclusion_df, processing_level)
 
         # Prepare `.gitignore` ------------------------------

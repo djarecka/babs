@@ -112,7 +112,7 @@ class BABS:
                 with open(root_config_path) as f:
                     cfg = yaml.safe_load(f) or {}
 
-        analysis_dir = cfg.get('analysis_dir', 'analysis')
+        analysis_dir = cfg.get('analysis_path', 'analysis')
         self.analysis_path = op.normpath(op.join(self.project_root, analysis_dir))
         self._analysis_datalad_handle = None
 

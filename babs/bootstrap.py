@@ -108,7 +108,7 @@ class BABSBootstrap(BABS):
         with open(root_babs_config_path, 'w') as f:
             yaml.dump(
                 {
-                    'analysis_dir': babs_config.get('analysis_dir', 'analysis'),
+                    'analysis_path': babs_config.get('analysis_path', 'analysis'),
                     'input_ria_path': babs_config.get('input_ria_path', 'input_ria'),
                     'output_ria_path': babs_config.get('output_ria_path', 'output_ria'),
                 },

@@ -23,6 +23,7 @@ from babs.utils import (
     read_yaml,
     results_branch_dataframe,
     results_status_columns,
+    scheduler_status_columns,
     status_dtypes,
     update_job_batch_status,
     update_results_status,
@@ -177,11 +178,70 @@ class BABS:
         self.queue = validate_queue(config_yaml['queue'])
         self.container = config_yaml['container']
 
+        # Check for pipeline configuration (optional)
+        self.pipeline = config_yaml.get('pipeline', None)
+        if self.pipeline is not None:
+            self._validate_pipeline_config()
+
         # Check the output RIA:
         self.wtf_key_info(flag_output_ria_only=True)
 
         self.input_datasets = InputDatasets(self.processing_level, config_yaml['input_datasets'])
         self.input_datasets.update_abs_paths(Path(self.analysis_path))
+
+    def _validate_pipeline_config(self) -> None:
+        """Validate the pipeline configuration if present.
+
+        Raises
+        ------
+        ValueError
+            If the pipeline configuration is invalid.
+        """
+        if not isinstance(self.pipeline, list):
+            raise ValueError('Pipeline configuration must be a list of steps')
+
+        if len(self.pipeline) == 0:
+            raise ValueError('Pipeline configuration cannot be empty')
+
+        print(f'\nValidating pipeline configuration with {len(self.pipeline)} steps...')
+
+        for i, step in enumerate(self.pipeline):
+            if not isinstance(step, dict):
+                raise ValueError(f'Pipeline step {i} must be a dictionary')
+
+            required_fields = ['container_name']
+            for field in required_fields:
+                if field not in step:
+                    raise ValueError(f'Pipeline step {i} missing required field: {field}')
+
+            step_name = step['container_name']
+            print(f'  Step {i + 1}: {step_name}')
+
+            # Validate step configuration
+            step_config = step.get('config', {})
+            if step_config:
+                print(f'    Config: {len(step_config)} configuration items')
+
+                # Check for step-specific cluster resources
+                cluster_resources = step_config.get('cluster_resources', {})
+                if cluster_resources:
+                    print(f'    Cluster resources: {list(cluster_resources.keys())}')
+
+                # Check for step-specific bids_app_args
+                bids_app_args = step_config.get('bids_app_args', {})
+                if bids_app_args:
+                    print(f'    BIDS app args: {len(bids_app_args)} arguments')
+
+                # Check for step-specific singularity_args
+                singularity_args = step_config.get('singularity_args', [])
+                if singularity_args:
+                    print(f'    Singularity args: {len(singularity_args)} arguments')
+
+            # Check for inter-step commands
+            if 'inter_step_cmds' in step:
+                print('    Inter-step commands: present')
+
+        print('Pipeline configuration validation complete!')
 
     def _update_inclusion_dataframe(
         self, initial_inclusion_df: pd.DataFrame | None = None
@@ -252,6 +312,13 @@ class BABS:
         self.output_ria_data_dir = urlparse(
             proc_output_ria_data_dir.stdout.decode('utf-8')
         ).path.strip()
+
+        # If the URL points to the RIA store root (no .git there), resolve to the
+        # actual dataset git dir via the alias symlink (e.g. output_ria/alias/data -> XX/xxx-uuid).
+        if not op.exists(op.join(self.output_ria_data_dir, '.git')):
+            alias_link = op.join(self.output_ria_path, 'alias', 'data')
+            if op.exists(alias_link) and os.path.islink(alias_link):
+                self.output_ria_data_dir = op.realpath(alias_link)
 
         if not flag_output_ria_only:  # also want other information:
             # Get the dataset ID of `analysis`, i.e., `analysis_dataset_id`:
@@ -401,15 +468,51 @@ class BABS:
         Index: []
 
         """
+
+        def _empty_running():
+            cols = scheduler_status_columns + ['sub_id']
+            if self.processing_level == 'session':
+                cols = cols + ['ses_id']
+            return pd.DataFrame(columns=cols)
+
+        job_status_df = self.get_job_status_df()
         last_submitted_jobs_df = self.get_latest_submitted_jobs_df()
-        if last_submitted_jobs_df.empty:
-            return EMPTY_JOB_SUBMIT_DF
-        job_ids = last_submitted_jobs_df['job_id'].unique()
-        if not len(job_ids) == 1:
-            raise Exception(f'Expected 1 job id, got {len(job_ids)}')
-        job_id = job_ids[0]
-        currently_running_df = request_all_job_status(self.queue, job_id)
-        return identify_running_jobs(last_submitted_jobs_df, currently_running_df)
+
+        # Rows that are submitted but don't have results yet (candidates for "running")
+        if not job_status_df.empty:
+            sub = job_status_df['submitted'].fillna(False)
+            no_res = ~job_status_df['has_results'].fillna(False)
+            job_status_df = job_status_df.loc[sub & no_res].copy()
+
+        # Use status rows (submitted, no results) or last submit file for job_id -> sub/ses
+        mapping_df = job_status_df if not job_status_df.empty else last_submitted_jobs_df.copy()
+        if mapping_df.empty:
+            return _empty_running()
+
+        # Keep only columns needed to join scheduler output with subject/session
+        mapping_cols = ['job_id', 'task_id', 'sub_id']
+        if 'ses_id' in mapping_df:
+            mapping_cols.append('ses_id')
+        mapping_df = mapping_df[mapping_cols].copy()
+        # Drop rows with missing or invalid job/task ids so we only query real jobs
+        mapping_df = mapping_df[
+            mapping_df['job_id'].notna()
+            & mapping_df['task_id'].notna()
+            & (mapping_df['job_id'] > 0)
+            & (mapping_df['task_id'] > 0)
+        ]
+        if mapping_df.empty:
+            return _empty_running()
+
+        # Ask scheduler for each distinct job_id, keep only non-empty responses
+        job_ids = sorted({int(j) for j in mapping_df['job_id'].unique()})
+        running_dfs = [request_all_job_status(self.queue, j) for j in job_ids]
+        running_dfs = [d for d in running_dfs if not d.empty]
+        if not running_dfs:
+            return _empty_running()
+
+        # Attach sub_id (and ses_id) to scheduler rows and return
+        return identify_running_jobs(mapping_df, pd.concat(running_dfs, ignore_index=True))
 
     def get_job_status_df(self):
         """

@@ -95,11 +95,6 @@ class BABSBootstrap(BABS):
         self.queue = validate_queue(queue)
         system = System(self.queue)
 
-        # Persist analysis_dir so other BABS commands can find it:
-        root_babs_config_path = op.join(self.project_root, 'babs_layout_config.yaml')
-        with open(root_babs_config_path, 'w') as f:
-            yaml.dump({'analysis_dir': op.basename(self.analysis_path)}, f)
-
         # Create analysis folder: -----------------------------
         print('DataLad version: ' + get_datalad_version())
         print(f'\nCreating `{self.analysis_path}` folder (also a datalad dataset)...')
@@ -107,6 +102,11 @@ class BABSBootstrap(BABS):
             self.analysis_path, cfg_proc='yoda', annex=True
         )
         self.input_datasets.update_abs_paths(Path(self.analysis_path))
+
+        # Persist analysis_dir so other BABS commands can find it:
+        root_babs_config_path = op.join(self.project_root, 'babs_layout_config.yaml')
+        with open(root_babs_config_path, 'w') as f:
+            yaml.dump({'analysis_dir': op.basename(self.analysis_path)}, f)
         self.input_datasets.set_inclusion_dataframe(initial_inclusion_df, processing_level)
 
         # Prepare `.gitignore` ------------------------------
@@ -410,6 +410,8 @@ class BABSBootstrap(BABS):
             if op.exists(self.analysis_path):  # analysis folder is created by datalad
                 print('Removing input dataset(s) if cloned...')
                 for in_ds in self.input_datasets:
+                    if in_ds._babs_project_analysis_path is None:
+                        continue
                     if op.exists(in_ds.babs_project_analysis_path):
                         # use `datalad remove` to remove:
                         _ = self.analysis_datalad_handle.remove(

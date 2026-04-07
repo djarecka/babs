@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import datalad.api as dlapi
 import pandas as pd
+import yaml
 
 from babs.input_datasets import InputDatasets, OutputDatasets
 from babs.scheduler import (
@@ -39,7 +40,7 @@ EMPTY_JOB_SUBMIT_DF = pd.DataFrame(columns=['sub_id', 'ses_id', 'task_id', 'job_
 class BABS:
     """The BABS base class holds common attributes and methods for all BABS classes."""
 
-    def __init__(self, project_root):
+    def __init__(self, project_root, container_config=None):
         """The BABS class is for babs projects of BIDS Apps.
 
         The constructor only initializes the attributes.
@@ -102,7 +103,19 @@ class BABS:
         # attributes:
         self.project_root = str(project_root)
 
-        self.analysis_path = op.join(self.project_root, 'analysis')
+        if container_config is not None:
+            with open(container_config) as f:
+                cfg = yaml.safe_load(f)
+            analysis_dir = (cfg or {}).get('analysis_dir', 'analysis')
+        else:
+            root_config_path = op.join(self.project_root, 'babs_layout_config.yaml')
+            if op.exists(root_config_path):
+                with open(root_config_path) as f:
+                    root_cfg = yaml.safe_load(f)
+                analysis_dir = (root_cfg or {}).get('analysis_dir', 'analysis')
+            else:
+                analysis_dir = 'analysis'
+        self.analysis_path = op.join(self.project_root, analysis_dir)
         self._analysis_datalad_handle = None
 
         self.config_path = op.join(self.analysis_path, 'code/babs_proj_config.yaml')
@@ -171,7 +184,7 @@ class BABS:
         self.wtf_key_info(flag_output_ria_only=True)
 
         self.input_datasets = InputDatasets(self.processing_level, config_yaml['input_datasets'])
-        self.input_datasets.update_abs_paths(Path(self.project_root) / 'analysis')
+        self.input_datasets.update_abs_paths(Path(self.analysis_path))
 
     def _validate_pipeline_config(self) -> None:
         """Validate the pipeline configuration if present.

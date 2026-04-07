@@ -27,6 +27,9 @@ from babs.utils import (
 class BABSBootstrap(BABS):
     """A BABS subclass that implements the bootstrap process."""
 
+    def __init__(self, project_root, container_config=None):
+        super().__init__(project_root, container_config=container_config)
+
     def _apply_config(self):
         pass
 
@@ -110,9 +113,14 @@ class BABSBootstrap(BABS):
         self.queue = validate_queue(queue)
         system = System(self.queue)
 
-        # Create `analysis` folder: -----------------------------
+        # Persist analysis_dir so other BABS commands can find it:
+        root_babs_config_path = op.join(self.project_root, 'babs_layout_config.yaml')
+        with open(root_babs_config_path, 'w') as f:
+            yaml.dump({'analysis_dir': op.basename(self.analysis_path)}, f)
+
+        # Create analysis folder: -----------------------------
         print('DataLad version: ' + get_datalad_version())
-        print('\nCreating `analysis` folder (also a datalad dataset)...')
+        print(f'\nCreating `{self.analysis_path}` folder (also a datalad dataset)...')
         self._analysis_datalad_handle = dlapi.create(
             self.analysis_path, cfg_proc='yoda', annex=True
         )
@@ -160,6 +168,7 @@ class BABSBootstrap(BABS):
         with open(self.config_path, 'w') as f:
             f.write(
                 template.render(
+                    analysis_dir=op.basename(self.analysis_path),
                     processing_level=self.processing_level,
                     queue=self.queue,
                     input_ds=self.input_datasets,

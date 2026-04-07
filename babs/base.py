@@ -114,7 +114,7 @@ class BABS:
                 analysis_dir = (root_cfg or {}).get('analysis_dir', 'analysis')
             else:
                 analysis_dir = 'analysis'
-        self.analysis_path = op.join(self.project_root, analysis_dir)
+        self.analysis_path = op.normpath(op.join(self.project_root, analysis_dir))
         self._analysis_datalad_handle = None
 
         self.config_path = op.join(self.analysis_path, 'code/babs_proj_config.yaml')

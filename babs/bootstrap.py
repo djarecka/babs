@@ -3,6 +3,7 @@
 import os
 import os.path as op
 import subprocess
+import tempfile
 from pathlib import Path
 
 import datalad.api as dlapi
@@ -40,6 +41,7 @@ class BABSBootstrap(BABS):
         container_name,
         container_config,
         initial_inclusion_df=None,
+        throttle=None,
     ):
         """
         Bootstrap a babs project: initialize datalad-tracked RIAs, generate scripts to be used, etc
@@ -60,6 +62,11 @@ class BABSBootstrap(BABS):
             of how to run the BIDS App container
         initial_inclusion_df: pd.DataFrame
             initial inclusion dataframe of subjects/sessions to analyze
+        throttle: int or None, optional
+            Optional throttle value for SLURM array jobs. This limits the number of
+            simultaneously running array tasks. The value will be added to the array
+            specification as `%<throttle>`. Example: `10` will result in
+            `--array=1-${max_array}%10`.
         """
         if op.exists(self.project_root):
             raise FileExistsError(
@@ -74,13 +81,19 @@ class BABSBootstrap(BABS):
                 f"The parent folder '{parent_dir}' does not exist! `babs init` won't proceed."
             )
 
-        # check if parent directory is writable:
-        if not os.access(parent_dir, os.W_OK):
+        # check if parent directory is writable (os.access unreliable on NFS/ACL):
+        try:
+            with tempfile.TemporaryFile(dir=parent_dir):
+                pass
+        except OSError:
             raise ValueError(
                 f"The parent folder '{parent_dir}' is not writable! `babs init` won't proceed."
             )
 
         os.makedirs(self.project_root)
+
+        # Store throttle value for job submission template
+        self.throttle = throttle
 
         # validate `processing_level`:
         self.processing_level = validate_processing_level(processing_level)
@@ -88,6 +101,11 @@ class BABSBootstrap(BABS):
         # Read the config yaml to get the datasets:
         with open(container_config) as f:
             babs_config = yaml.safe_load(f)
+        # Detect optional pipeline configuration from the provided YAML
+        # Store on self so downstream bootstrap logic can branch accordingly
+        self.pipeline = babs_config.get('pipeline')
+        # Store top-level zip_foldernames for pipeline use
+        self.zip_foldernames = babs_config.get('zip_foldernames', {})
         datasets = babs_config.get('input_datasets')
         if not datasets:
             raise ValueError('No input datasets found in the container config file.')
@@ -225,6 +243,7 @@ class BABSBootstrap(BABS):
         )
         # into `analysis/containers` folder
 
+        # Create initial container for sanity check
         container = Container(container_ds, container_name, container_config)
 
         # sanity check of container ds:
@@ -234,69 +253,98 @@ class BABSBootstrap(BABS):
         # Bootstrap scripts:
         # ==============================================================
 
-        # Generate `<containerName>_zip.sh`: ----------------------------------
-        # which is a bash script of singularity run + zip
-        # in folder: `analysis/code`
-        print('\nGenerating a bash script for running container and zipping the outputs...')
-        print('This bash script will be named as `' + container_name + '_zip.sh`')
-        bash_path = op.join(self.analysis_path, 'code', container_name + '_zip.sh')
-        container.generate_bash_run_bidsapp(bash_path, self.input_datasets, self.processing_level)
-        self.datalad_save(
-            path='code/' + container_name + '_zip.sh',
-            message='Generate script of running container',
-        )
+        # Check if this is a pipeline configuration
+        if self.pipeline is not None:
+            # Validate all containers in the pipeline
+            print(f'\nValidating {len(self.pipeline)} containers in pipeline...')
+            containers = []
+            for i, step in enumerate(self.pipeline):
+                step_container_name = step['container_name']
+                print(f'Validating container {i + 1}/{len(self.pipeline)}: {step_container_name}')
+                step_container = Container(container_ds, step_container_name, container_config)
+                step_container.sanity_check(self.analysis_path)
+                containers.append(step_container)
 
-        # make another folder within `code` for test jobs:
-        os.makedirs(op.join(self.analysis_path, 'code/check_setup'), exist_ok=True)
-
-        # Generate `participant_job.sh`: --------------------------------------
-        print('\nGenerating a bash script for running jobs at participant (or session) level...')
-        print('This bash script will be named as `participant_job.sh`')
-        bash_path = op.join(self.analysis_path, 'code', 'participant_job.sh')
-        container.generate_bash_participant_job(
-            bash_path, self.input_datasets, self.processing_level, system
-        )
-
-        # also, generate a bash script of a test job used by `babs check-setup`:
-        path_check_setup = op.join(self.analysis_path, 'code/check_setup')
-        container.generate_bash_test_job(path_check_setup, system)
-
-        self.datalad_save(
-            path=[
-                'code/participant_job.sh',
-                'code/check_setup/call_test_job.sh',
-                'code/check_setup/test_job.py',
-            ],
-            message='Participant compute job implementation',
-        )
-        # NOTE: `dlapi.save()` does not work...
-        # e.g., datalad save -m "Participant compute job implementation"
+            self._bootstrap_pipeline_scripts(container_ds, container_config, system)
+            # Use first container for compatibility with existing code
+            container = containers[0]
+        else:
+            self._bootstrap_single_app_scripts(
+                container_ds, container_name, container_config, system
+            )
+            container = Container(container_ds, container_name, container_config)
 
         # Copy in any other files needed:
         self._init_import_files(container.config.get('imported_files', []))
-        # Create the inclusion file
-        self._update_inclusion_dataframe(initial_inclusion_df)
+        # _update_inclusion_dataframe() expects a DataFrame (or None).
+        # If --list_sub_file was provided, use the parsed DataFrame
+        # stored in initial_inclu_df by set_inclusion_dataframe() above.
+        inclusion_df_for_update = (
+            self.input_datasets.initial_inclu_df if initial_inclusion_df is not None else None
+        )
+        self._update_inclusion_dataframe(inclusion_df_for_update)
 
         # Generate the template of job submission: --------------------------------
-        print('\nGenerating a template for job submission calls...')
-        print('The template text file will be named as `submit_job_template.yaml`.')
-        yaml_path = op.join(self.analysis_path, 'code', 'submit_job_template.yaml')
-        container.generate_job_submit_template(yaml_path, self, system)
+        print('\nGenerating templates for job submission calls...')
+        if self.pipeline is not None:
+            # Generate templates for all pipeline containers
+            for i, step in enumerate(self.pipeline):
+                step_container_name = step['container_name']
+                print(
+                    f'Generating job template for container {i + 1}/{len(self.pipeline)}: '
+                    f'{step_container_name}'
+                )
+                step_container = Container(container_ds, step_container_name, container_config)
 
-        # also, generate template for testing job used by `babs check-setup`:
-        yaml_test_path = op.join(
-            self.analysis_path, 'code/check_setup', 'submit_test_job_template.yaml'
-        )
-        container.generate_job_submit_template(yaml_test_path, self, system, test=True)
+                # Main job template (use first container for main template)
+                if i == 0:
+                    yaml_path = op.join(self.analysis_path, 'code', 'submit_job_template.yaml')
+                    step_container.generate_job_submit_template(yaml_path, self, system)
+
+                # Test job template for each container
+                yaml_test_path = op.join(
+                    self.analysis_path,
+                    'code/check_setup',
+                    f'submit_test_job_template_step_{i + 1}_{step_container_name}.yaml',
+                )
+                step_container.generate_job_submit_template(
+                    yaml_test_path, self, system, test=True
+                )
+        else:
+            # Single container case
+            print('The template text file will be named as `submit_job_template.yaml`.')
+            yaml_path = op.join(self.analysis_path, 'code', 'submit_job_template.yaml')
+            container.generate_job_submit_template(yaml_path, self, system)
+
+            # also, generate template for testing job used by `babs check-setup`:
+            yaml_test_path = op.join(
+                self.analysis_path, 'code/check_setup', 'submit_test_job_template.yaml'
+            )
+            container.generate_job_submit_template(yaml_test_path, self, system, test=True)
 
         # datalad save:
-        self.datalad_save(
-            path=[
-                'code/submit_job_template.yaml',
-                'code/check_setup/submit_test_job_template.yaml',
-            ],
-            message='Template for job submission',
-        )
+        if self.pipeline is not None:
+            # Save all pipeline template files
+            template_paths = ['code/submit_job_template.yaml']
+            for i, step in enumerate(self.pipeline):
+                step_container_name = step['container_name']
+                template_paths.append(
+                    f'code/check_setup/submit_test_job_template_step_{i + 1}_'
+                    f'{step_container_name}.yaml'
+                )
+            self.datalad_save(
+                path=template_paths,
+                message='Templates for pipeline job submission',
+            )
+        else:
+            # Single container case
+            self.datalad_save(
+                path=[
+                    'code/submit_job_template.yaml',
+                    'code/check_setup/submit_test_job_template.yaml',
+                ],
+                message='Template for job submission',
+            )
 
         # Finish up and get ready for clusters running: -----------------------
         # create folder `logs` in `analysis`; future log files go here
@@ -360,6 +408,128 @@ class BABSBootstrap(BABS):
             " Path to this BABS project: '" + self.project_root + "'"
         )
         print('`babs init` was successful!')
+
+    def _bootstrap_single_app_scripts(
+        self, container_ds, container_name, container_config, system
+    ):
+        """Bootstrap scripts for single BIDS app configuration."""
+        container = Container(container_ds, container_name, container_config)
+
+        # Generate `<containerName>_zip.sh`: ----------------------------------
+        # which is a bash script of singularity run + zip
+        # in folder: `analysis/code`
+        print('\nGenerating a bash script for running container and zipping the outputs...')
+        print('This bash script will be named as `' + container_name + '_zip.sh`')
+        bash_path = op.join(self.analysis_path, 'code', container_name + '_zip.sh')
+        container.generate_bash_run_bidsapp(bash_path, self.input_datasets, self.processing_level)
+        self.datalad_save(
+            path='code/' + container_name + '_zip.sh',
+            message='Generate script of running container',
+        )
+
+        # make another folder within `code` for test jobs:
+        os.makedirs(op.join(self.analysis_path, 'code/check_setup'), exist_ok=True)
+
+        # Generate `participant_job.sh`: --------------------------------------
+        print('\nGenerating a bash script for running jobs at participant (or session) level...')
+        print('This bash script will be named as `participant_job.sh`')
+        bash_path = op.join(self.analysis_path, 'code', 'participant_job.sh')
+        container.generate_bash_participant_job(
+            bash_path,
+            self.input_datasets,
+            self.processing_level,
+            system,
+            project_root=op.dirname(self.analysis_path),
+        )
+
+        # also, generate a bash script of a test job used by `babs check-setup`:
+        path_check_setup = op.join(self.analysis_path, 'code/check_setup')
+        container.generate_bash_test_job(path_check_setup, system)
+
+    def _bootstrap_pipeline_scripts(self, container_ds, container_config, system):
+        """Bootstrap scripts for pipeline configuration."""
+        from babs.generate_bidsapp_runscript import generate_pipeline_runscript
+        from babs.generate_submit_script import generate_submit_script
+
+        print('\nGenerating pipeline scripts...')
+
+        # Prepare container images for submit script
+        container_images = [
+            f'containers/.datalad/environments/{s["container_name"]}/image' for s in self.pipeline
+        ]
+
+        # Use top-level zip_foldernames for pipeline final output
+        final_zip_foldernames = self.zip_foldernames
+
+        # Generate pipeline run script using unified pipeline generator
+        pipeline_script_path = op.join(self.analysis_path, 'code', 'pipeline_zip.sh')
+        templateflow_home = os.getenv('TEMPLATEFLOW_HOME')
+
+        pipeline_script_content = generate_pipeline_runscript(
+            pipeline_config=self.pipeline,
+            processing_level=self.processing_level,
+            input_datasets=self.input_datasets,
+            templateflow_home=templateflow_home,
+            final_zip_foldernames=final_zip_foldernames,
+        )
+
+        with open(pipeline_script_path, 'w') as f:
+            f.write(pipeline_script_content)
+        os.chmod(pipeline_script_path, 0o700)
+
+        self.datalad_save(
+            path='code/pipeline_zip.sh',
+            message='Generate pipeline run script',
+        )
+
+        # make another folder within `code` for test jobs:
+        os.makedirs(op.join(self.analysis_path, 'code/check_setup'), exist_ok=True)
+
+        # Generate `participant_job.sh`: --------------------------------------
+        print('\nGenerating a bash script for running jobs at participant (or session) level...')
+        print('This bash script will be named as `participant_job.sh`')
+        bash_path = op.join(self.analysis_path, 'code', 'participant_job.sh')
+
+        # Load user configuration
+        with open(container_config) as f:
+            user_config = yaml.safe_load(f)
+
+        # Get user's cluster resources configuration (same as single-app case)
+        cluster_resources_config = user_config.get('cluster_resources', {})
+
+        participant_job_content = generate_submit_script(
+            queue_system=self.queue,
+            cluster_resources_config=cluster_resources_config,
+            script_preamble=user_config.get('script_preamble', ''),
+            job_scratch_directory=user_config.get('job_compute_space', '/tmp'),
+            input_datasets=self.input_datasets,
+            processing_level=self.processing_level,
+            container_name='pipeline',  # placeholder
+            zip_foldernames=final_zip_foldernames,
+            run_script_relpath='code/pipeline_zip.sh',
+            container_images=container_images,
+            datalad_run_message='pipeline',
+            project_root=op.dirname(self.analysis_path),
+        )
+
+        with open(bash_path, 'w') as f:
+            f.write(participant_job_content)
+        os.chmod(bash_path, 0o700)
+
+        # also, generate bash scripts of test jobs used by `babs check-setup`:
+        # Generate test jobs for all containers in the pipeline
+        path_check_setup = op.join(self.analysis_path, 'code/check_setup')
+        for i, step in enumerate(self.pipeline):
+            step_container_name = step['container_name']
+            print(
+                f'Generating test job for container {i + 1}/{len(self.pipeline)}: '
+                f'{step_container_name}'
+            )
+            step_container = Container(container_ds, step_container_name, container_config)
+            # Create separate test job directories for each container
+            step_check_setup = op.join(path_check_setup, f'step_{i + 1}_{step_container_name}')
+            os.makedirs(step_check_setup, exist_ok=True)
+            step_container.generate_bash_test_job(step_check_setup, system)
 
     def _init_import_files(self, file_list):
         """

@@ -1,5 +1,26 @@
 # What's New
 
+## Version 0.5.4
+
+### What's Changed
+#### 🎉 Exciting New Features
+* Add BABS chaining to run 2 BIDS apps in a pipeline by @tien-tong in https://github.com/PennLINC/babs/pull/316
+#### 🐛 Bug Fixes
+* Fix `babs submit --select` argument parsing by @singlesp in https://github.com/PennLINC/babs/pull/312
+#### Other Changes
+* Update installation.rst by @yibeichan in https://github.com/PennLINC/babs/pull/309
+* Update eg_aslprep-0-7-5.yaml by @B-Sevchik in https://github.com/PennLINC/babs/pull/304
+* Fix coverage by @tien-tong in https://github.com/PennLINC/babs/pull/318
+* Edit nordic-fmriprep pipeline
+
+**Full Changelog**: https://github.com/PennLINC/babs/compare/0.5.3...0.5.4
+
+## Version 0.5.3
+
+* Fix `subject_selection_flag` by @tientong98 in https://github.com/PennLINC/babs/pull/308
+* Add freesurfer-post support by @tientong98 in https://github.com/PennLINC/babs/pull/306
+* Update documentation and example configurations
+
 ## Version 0.5.2
 
 * Fix `babs sync-code` by @smeisler in https://github.com/PennLINC/babs/pull/299

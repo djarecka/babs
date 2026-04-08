@@ -30,11 +30,11 @@ Step 2. Install BABS and dependent software
 
 We have a `yaml` file on our repo for easily installing BABS and its dependencies with a single command::
 
-    # Get the evironment_hpc.yaml file from github:
+    # Get the environment_hpc.yaml file from github:
     wget https://raw.githubusercontent.com/PennLINC/babs/refs/heads/main/environment_hpc.yml
 
     # Install into a new environment called babs:
-    mamba create -f evironment_hpc.yml
+    mamba env create -f environment_hpc.yml
 
     # Activate the environment:
     mamba activate babs
@@ -42,6 +42,12 @@ We have a `yaml` file on our repo for easily installing BABS and its dependencie
 .. note::
     If you are using ``conda`` or ``micromamba`` instead of ``mamba``, simply replace ``mamba``
     with either ``conda`` or ``micromamba`` in the commands above.
+
+.. note::
+    On older HPC systems, compiled scientific dependencies (for example ``scipy`` via ``niworkflows``)
+    should be installed from conda-forge rather than built by ``pip`` from source.
+    If environment creation fails while building wheels, re-run using the
+    ``environment_hpc.yml`` from this repository and prefer ``mamba/micromamba env create``.
 
 Before proceeding, make sure your ``Git`` identity has been configured.
 You can check whether this has already been done via::

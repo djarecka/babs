@@ -5,6 +5,7 @@ import pytest
 
 from babs.generate_bidsapp_runscript import (
     generate_bidsapp_runscript,
+    generate_pipeline_runscript,
     get_input_unzipping_cmds,
 )
 from babs.utils import (
@@ -111,7 +112,7 @@ def test_get_input_unipping_cmds():
 
 
 @pytest.mark.parametrize(('input_datasets', 'config_file', 'processing_level'), testing_pairs)
-def test_generate_bidsapp_runscript(input_datasets, config_file, processing_level):
+def test_generate_bidsapp_runscript(input_datasets, config_file, processing_level, tmp_path):
     """Test that the bidsapp runscript is generated correctly."""
     config_path = NOTEBOOKS_DIR / config_file
     container_name = config_file.split('_')[1]
@@ -129,7 +130,7 @@ def test_generate_bidsapp_runscript(input_datasets, config_file, processing_leve
         templateflow_home='/path/to/templateflow_home',
     )
 
-    out_fn = Path('.') / f'{config_path.name}_{processing_level}.sh'
+    out_fn = tmp_path / f'{config_path.name}_{processing_level}.sh'
     with open(out_fn, 'w') as f:
         f.write(script_content)
     passed, status = run_shellcheck(str(out_fn))
@@ -161,3 +162,28 @@ def run_shellcheck(script_path):
         return False, e.output
     except Exception as e:
         return False, str(e)
+
+
+def test_generate_pipeline_runscript(tmp_path):
+    """Test that the pipeline runscript is generated correctly."""
+    config_path = NOTEBOOKS_DIR / 'eg_nordic-fmriprep_pipeline.yaml'
+    config = read_yaml(config_path)
+
+    # Extract pipeline steps from config
+    pipeline_config = config['pipeline']
+
+    script_content = generate_pipeline_runscript(
+        pipeline_config=pipeline_config,
+        processing_level='subject',
+        input_datasets=input_datasets_prep,
+        templateflow_home='/path/to/templateflow_home',
+        final_zip_foldernames=config.get('zip_foldernames', {}),
+    )
+
+    out_fn = tmp_path / f'{config_path.name}_pipeline.sh'
+    with open(out_fn, 'w') as f:
+        f.write(script_content)
+    passed, status = run_shellcheck(str(out_fn))
+    if not passed:
+        print(script_content)
+    assert passed, status

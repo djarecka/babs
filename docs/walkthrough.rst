@@ -354,6 +354,19 @@ and results and provenance are saved. An example command of ``babs init`` is as 
         --queue slurm \
         "${HOME}/babs_demo/my_BABS_project"
 
+Retrieve the container:
+
+..  code-block:: console
+
+    $ cd "${HOME}/babs_demo/my_BABS_project/analysis"
+    $ datalad get -r containers
+
+.. note::
+    **Optional: Throttling array jobs**: If you have many jobs and want to limit how many
+    run simultaneously, you can add ``--throttle <number>`` to the command above.
+    For example, ``--throttle 10`` will limit SLURM to run at most 10 array tasks at once.
+    This helps avoid overwhelming the cluster or hitting resource limits when submitting
+    large numbers of array tasks.
 
 Here you will create a BABS project called ``my_BABS_project`` in directory ``~/babs_demo``.
 The input dataset is specified in the yaml file and no longer specified in the command line.

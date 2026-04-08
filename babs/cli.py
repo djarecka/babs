@@ -118,6 +118,14 @@ def _parse_init():
         " Please refer to section below 'What if ``babs init`` fails?' for details.",
         #      ^^ in `babs init.rst`, pointed to below section for more
     )
+    parser.add_argument(
+        '--throttle',
+        type=int,
+        help='Optional throttle value for SLURM array jobs. '
+        'This limits the number of simultaneously running array tasks. '
+        'The value will be added to the array specification as ``%%<throttle>``. '
+        'Example: ``--throttle 10`` will result in ``--array=1-${max_array}%%10``.',
+    )
 
     return parser
 
@@ -148,6 +156,7 @@ def babs_init_main(
     processing_level: str,
     queue: str,
     keep_if_failed: bool,
+    throttle: int | None = None,
 ):
     """This is the core function of babs init.
 
@@ -175,6 +184,11 @@ def babs_init_main(
         sge or slurm
     keep_if_failed: bool
         If `babs init` failed with error, whether to keep the created BABS project.
+    throttle: int or None, optional
+        Optional throttle value for SLURM array jobs. This limits the number of
+        simultaneously running array tasks. The value will be added to the array
+        specification as `%<throttle>`. Example: `10` will result in
+        `--array=1-${max_array}%10`.
     """
 
     from babs import BABSBootstrap
@@ -188,6 +202,7 @@ def babs_init_main(
             container_name,
             container_config,
             list_sub_file,
+            throttle=throttle,
         )
     except Exception as exc:
         print('\n`babs init` failed! Below is the error message:')
@@ -319,10 +334,14 @@ def _parse_submit():
         '--select',
         action='append',  # append each `--job` as a list;
         nargs='+',
-        help='The subject ID (and session ID) whose job to be submitted.'
-        ' Can repeat to submit more than one job.'
-        ' Format would be `--job sub-xx` for single-session dataset,'
-        ' and `--job sub-xx ses-yy` for multiple-session dataset.',
+        help=(
+            'Select specific jobs to submit by subject and optionally session. '
+            'Use as `--select sub-XX [ses-YY]` and repeat the flag to submit multiple jobs, '
+            'or provide multiple values per flag (argparse appends and supports nargs). '
+            'Examples: `--select sub-01`, `--select sub-01 ses-01`, '
+            '`--select sub-01 --select sub-02`, '
+            '`--select sub-01 ses-01 --select sub-02 ses-02`.'
+        ),
     )
 
     group.add_argument(
@@ -331,6 +350,14 @@ def _parse_submit():
         ' The file should columns: `sub_id` and, if session-level processing, `ses_id`.'
         ' If this flag is specified, it will override the `--select` flag.',
         type=PathExists,
+    )
+    parser.add_argument(
+        '--skip-running-jobs',
+        action='store_true',
+        help=(
+            'Allow submission when there are running/pending jobs by skipping '
+            'those jobs instead of raising errors.'
+        ),
     )
 
     return parser
@@ -357,6 +384,7 @@ def babs_submit_main(
     count: int | None,
     select: list | None,
     inclusion_file: Path | None,
+    skip_running_jobs: bool = False,
 ):
     """This is the core function of ``babs submit``.
 
@@ -370,6 +398,8 @@ def babs_submit_main(
         list of subject IDs and session IDs to be submitted.
     inclusion_file: Path
         path to a CSV file that lists the subjects (and sessions) to analyze.
+    skip_running_jobs: bool
+        whether to allow submission when there are running/pending jobs
     """
     import pandas as pd
 
@@ -387,7 +417,11 @@ def babs_submit_main(
     else:
         df_job_specified = None
 
-    babs_proj.babs_submit(count=count, submit_df=df_job_specified)
+    babs_proj.babs_submit(
+        count=count,
+        submit_df=df_job_specified,
+        skip_running_jobs=skip_running_jobs,
+    )
 
 
 def _parse_status():

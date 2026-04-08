@@ -91,7 +91,7 @@ testing_pairs = [
 
 
 @pytest.mark.parametrize(('input_datasets', 'config_file', 'processing_level'), testing_pairs)
-def test_generate_submit_script(input_datasets, config_file, processing_level):
+def test_generate_submit_script(input_datasets, config_file, processing_level, tmp_path):
     """Test that the bidsapp runscript is generated correctly."""
     config_path = NOTEBOOKS_DIR / config_file
     container_name = config_file.split('_')[1]
@@ -107,7 +107,7 @@ def test_generate_submit_script(input_datasets, config_file, processing_level):
         zip_foldernames=config['zip_foldernames'],
     )
 
-    out_fn = Path('.') / f'participant_job_{config_path.name}_{processing_level}.sh'
+    out_fn = tmp_path / f'participant_job_{config_path.name}_{processing_level}.sh'
     with open(out_fn, 'w') as f:
         f.write(script_content)
     passed, status = run_shellcheck(str(out_fn))
@@ -139,3 +139,36 @@ def run_shellcheck(script_path):
         return False, e.output
     except Exception as e:
         return False, str(e)
+
+
+def test_generate_submit_script_pipeline(tmp_path):
+    """Test submit script generation for pipeline configuration."""
+    # Use same pattern as single-app tests: read from existing YAML config
+    config_path = NOTEBOOKS_DIR / 'eg_nordic-fmriprep_pipeline.yaml'
+    config = read_yaml(config_path)
+
+    script_content = generate_submit_script(
+        queue_system='slurm',
+        cluster_resources_config=config['cluster_resources'],
+        script_preamble=config['script_preamble'],
+        job_scratch_directory=config['job_compute_space'],
+        input_datasets=input_datasets_prep,
+        processing_level='subject',
+        container_name='pipeline',  # placeholder
+        zip_foldernames=config['zip_foldernames'],
+        run_script_relpath='code/pipeline_zip.sh',
+        container_images=[
+            'containers/.datalad/environments/nordic-0-0-1/image',
+            'containers/.datalad/environments/fmriprep-25.0.0/image',
+        ],
+        datalad_run_message='nordic-fmriprep pipeline',
+    )
+
+    # Write script to file and run shellcheck (same as single-app tests)
+    out_fn = tmp_path / 'participant_job.sh'
+    with open(out_fn, 'w') as f:
+        f.write(script_content)
+    passed, status = run_shellcheck(str(out_fn))
+    if not passed:
+        print(script_content)
+    assert passed, status

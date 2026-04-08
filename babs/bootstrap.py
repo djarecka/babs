@@ -145,7 +145,7 @@ class BABSBootstrap(BABS):
 
         # Create `babs_proj_config.yaml` file: ----------------------
         print('Save BABS project configurations in a YAML file ...')
-        print("Path to this yaml file will be: 'analysis/code/babs_proj_config.yaml'")
+        print(f"Path to this yaml file will be: '{self.config_path}'")
 
         env = Environment(
             loader=PackageLoader('babs', 'templates'),

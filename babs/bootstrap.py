@@ -440,6 +440,7 @@ class BABSBootstrap(BABS):
             self.processing_level,
             system,
             project_root=op.dirname(self.analysis_path),
+            analysis_dir=op.basename(self.analysis_path),
         )
 
         # also, generate a bash script of a test job used by `babs check-setup`:
@@ -510,6 +511,7 @@ class BABSBootstrap(BABS):
             container_images=container_images,
             datalad_run_message='pipeline',
             project_root=op.dirname(self.analysis_path),
+            analysis_dir=op.basename(self.analysis_path),
         )
 
         with open(bash_path, 'w') as f:

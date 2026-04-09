@@ -136,6 +136,8 @@ class BABSBootstrap(BABS):
             os.remove(gitignore_path)
         gitignore_file = open(gitignore_path, 'a')  # open in append mode
 
+        # not to track `.babs` folder:
+        gitignore_file.write('\n.babs')
         # not to track `logs` folder:
         gitignore_file.write('\nlogs')
         # not to track `.*_datalad_lock`:

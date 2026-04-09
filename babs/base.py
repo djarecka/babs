@@ -107,7 +107,7 @@ class BABS:
             with open(container_config) as f:
                 cfg = yaml.safe_load(f)
         else:
-            root_config_path = op.join(self.project_root, 'babs_layout_config.yaml')
+            root_config_path = op.join(self.project_root, '.babs', 'babs_init_config.yaml')
             cfg = {}
             if op.exists(root_config_path):
                 with open(root_config_path) as f:
